@@ -51,6 +51,14 @@ button:active{transform:scale(.97);}
 .tab.active{background:var(--accent); color:#fff;}
 .error-box{background:#3a1420; color:#ff8fa3; padding:10px 14px; border-radius:10px; font-size:13px; margin-bottom:10px; display:none;}
 
+.avatar-grid{display:grid; grid-template-columns:repeat(6,1fr); gap:8px; margin-top:6px;}
+.avatar-opt{background:#12162b; border:2px solid transparent; border-radius:12px; padding:8px 0; text-align:center; font-size:22px; cursor:pointer;}
+.avatar-opt.selected{border-color:var(--accent); background:#2a1420;}
+.avatar-big{width:74px; height:74px; border-radius:50%; background:#12162b; display:flex; align-items:center; justify-content:center; font-size:34px; margin:0 auto;}
+.topbar-avatar{width:38px; height:38px; border-radius:50%; background:#12162b; display:flex; align-items:center; justify-content:center; font-size:19px; cursor:pointer; flex-shrink:0; overflow:hidden;}
+.topbar-avatar img{width:100%; height:100%; object-fit:cover;}
+.topbar-left{display:flex; align-items:center; gap:10px;}
+
 /* LOBBY */
 .topbar{display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;}
 .roomlist{flex:1; overflow-y:auto;}
@@ -75,7 +83,8 @@ button:active{transform:scale(.97);}
 .player-chip{background:var(--card); border-radius:12px; padding:10px 6px; text-align:center; font-size:12px; position:relative;}
 .player-chip.dead{opacity:.35;}
 .player-chip.host::after{content:'👑'; position:absolute; top:-6px; right:-4px; font-size:14px;}
-.avatar{width:40px; height:40px; border-radius:50%; background:linear-gradient(135deg,var(--accent2),var(--accent)); margin:0 auto 6px; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:15px;}
+.avatar{width:40px; height:40px; border-radius:50%; background:linear-gradient(135deg,var(--accent2),var(--accent)); margin:0 auto 6px; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:18px; overflow:hidden;}
+.avatar img{width:100%; height:100%; object-fit:cover;}
 
 .chatbox{background:var(--card); border-radius:14px; padding:10px; flex:1; display:flex; flex-direction:column; min-height:160px; max-height:220px;}
 .chat-messages{flex:1; overflow-y:auto; margin-bottom:8px;}
@@ -131,33 +140,56 @@ button:active{transform:scale(.97);}
 </head>
 <body>
 
-<!-- AUTH -->
-<div id="screen-auth" class="screen active">
+<!-- LOADING -->
+<div id="screen-loading" class="screen active">
   <span class="wolf-emoji">🐺</span>
   <div class="title">Werewolf Game</div>
-  <div class="subtitle">Balance smart roles • Realtime • Chat</div>
+  <div class="subtitle" id="loading-text">Menghubungkan akun Telegram...</div>
+</div>
+
+<!-- NICKNAME (first time only) -->
+<div id="screen-nickname" class="screen">
+  <span class="wolf-emoji">🎭</span>
+  <div class="title">Atur Profil Kamu</div>
+  <div class="subtitle">Akun otomatis dari Telegram, tinggal atur nama & avatar</div>
   <div class="card">
-    <div class="tabs">
-      <div class="tab active" id="tab-login" onclick="switchTab('login')">Login</div>
-      <div class="tab" id="tab-register" onclick="switchTab('register')">Register</div>
+    <label>Nama Tampilan</label>
+    <input id="nick-name" placeholder="Nama kamu" maxlength="20">
+    <label>Pilih Avatar</label>
+    <div class="avatar-grid" id="nick-avatar-grid"></div>
+    <button class="btn-primary" style="margin-top:14px;" onclick="submitNickname()">Mulai Main 🚀</button>
+  </div>
+</div>
+
+<!-- PROFILE SETTINGS -->
+<div id="screen-profile" class="screen">
+  <div class="topbar">
+    <div style="font-size:18px;font-weight:700;">⚙️ Pengaturan Profil</div>
+    <button class="btn-secondary btn-small" onclick="closeProfile()">Kembali</button>
+  </div>
+  <div class="card">
+    <div style="text-align:center;margin-bottom:14px;">
+      <div class="avatar-big" id="profile-avatar-preview">🐺</div>
     </div>
-    <div class="error-box" id="auth-error"></div>
-    <label>Username</label>
-    <input id="auth-username" placeholder="Username">
-    <label>Password</label>
-    <input id="auth-password" type="password" placeholder="Password">
-    <button class="btn-primary" id="auth-submit" onclick="submitAuth()">Masuk</button>
+    <label>Nama Tampilan</label>
+    <input id="profile-name" maxlength="20">
+    <label>Pilih Avatar</label>
+    <div class="avatar-grid" id="profile-avatar-grid"></div>
+    <button class="btn-primary" style="margin-top:14px;" onclick="saveProfile()">Simpan Perubahan</button>
   </div>
 </div>
 
 <!-- LOBBY -->
 <div id="screen-lobby" class="screen">
   <div class="topbar">
-    <div>
-      <div style="font-size:18px;font-weight:700;">👋 <span id="lobby-username"></span></div>
-      <div class="subtitle" style="margin:0;text-align:left;">Pilih room atau buat baru</div>
+    <div class="topbar-left">
+      <div class="topbar-avatar" id="lobby-avatar" onclick="openProfile()">🐺</div>
+      <div>
+        <div style="font-size:16px;font-weight:700;" id="lobby-username"></div>
+        <div class="subtitle" style="margin:0;text-align:left;">Pilih room atau buat baru</div>
+      </div>
     </div>
-    <button class="btn-secondary btn-small" onclick="location.reload()">🔄</button>
+    <button class="btn-secondary btn-small" onclick="socket.emit('get_lobby')">🔄</button>
   </div>
   <div class="roomlist" id="room-list"></div>
   <div class="fab" onclick="openCreateModal()">➕</div>
@@ -193,7 +225,10 @@ button:active{transform:scale(.97);}
       <div style="font-size:18px;font-weight:700;" id="room-name-title">Room</div>
       <div class="subtitle" style="margin:0;text-align:left;" id="room-code-label">Code: -</div>
     </div>
-    <button class="btn-danger btn-small" onclick="leaveRoom()">Keluar</button>
+    <div class="row" style="flex:0 0 auto;gap:6px;">
+      <button class="btn-secondary btn-small" onclick="refreshRoom()">🔄</button>
+      <button class="btn-danger btn-small" onclick="leaveRoom()">Keluar</button>
+    </div>
   </div>
   <div class="card">
     <div style="font-size:13px;color:var(--muted);margin-bottom:8px;" id="room-player-count">0/12 pemain</div>
@@ -270,11 +305,16 @@ button:active{transform:scale(.97);}
 <div class="toast" id="toast"></div>
 
 <script>
-try{ Telegram.WebApp.ready(); Telegram.WebApp.expand(); }catch(e){}
+let tgUser = null;
+try{
+  Telegram.WebApp.ready(); Telegram.WebApp.expand();
+  tgUser = Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.user;
+}catch(e){}
 
 const socket = io();
 let ME = null, CURRENT_ROOM = null, ROLES_META = {}, MY_ROLE = null, SELECTED_TARGET = null, SELECTED_TARGET2 = null, CURRENT_ACTION = null;
-let authMode = 'login';
+const AVATAR_LIST = ["🐺","🦊","🐻","🦁","🐯","🐼","🦝","🦉","🐸","🐵","🐲","🦄"];
+let selectedAvatar = "🐺", selectedAvatarProfile = "🐺";
 
 function toast(msg){
   const t = document.getElementById('toast'); t.innerText = msg; t.classList.add('show');
@@ -284,25 +324,72 @@ function showScreen(id){
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
   document.getElementById(id).classList.add('active');
 }
-function switchTab(mode){
-  authMode = mode;
-  document.getElementById('tab-login').classList.toggle('active', mode==='login');
-  document.getElementById('tab-register').classList.toggle('active', mode==='register');
-  document.getElementById('auth-submit').innerText = mode==='login' ? 'Masuk' : 'Daftar';
+function renderAvatar(av){
+  if(!av) return '🐺';
+  if(av.startsWith('http')) return `<img src="${av}">`;
+  return av;
 }
-function submitAuth(){
-  const u = document.getElementById('auth-username').value.trim();
-  const p = document.getElementById('auth-password').value;
-  document.getElementById('auth-error').style.display='none';
-  socket.emit(authMode, {username:u, password:p});
-}
-socket.on('auth_error', d=>{
-  const e = document.getElementById('auth-error'); e.innerText = d.message; e.style.display='block';
+
+socket.on('connect', ()=>{
+  let telegramId, firstName, photoUrl;
+  if(tgUser){
+    telegramId = tgUser.id; firstName = tgUser.first_name; photoUrl = tgUser.photo_url;
+  } else {
+    telegramId = localStorage.getItem('ww_guest_id');
+    if(!telegramId){ telegramId = 900000000 + Math.floor(Math.random()*99999999); localStorage.setItem('ww_guest_id', telegramId); }
+    firstName = 'Guest' + String(telegramId).slice(-4);
+  }
+  socket.emit('telegram_auth', {telegram_id: telegramId, first_name: firstName, photo_url: photoUrl});
 });
+
+socket.on('auth_error', d=>{ document.getElementById('loading-text').innerText = d.message; });
 socket.on('auth_success', d=>{
-  ME = d; document.getElementById('lobby-username').innerText = d.username;
+  ME = d;
+  document.getElementById('lobby-username').innerText = d.username;
+  document.getElementById('lobby-avatar').innerHTML = renderAvatar(d.avatar);
+  if(d.needs_nickname){
+    document.getElementById('nick-name').value = d.suggested_name || d.username;
+    selectedAvatar = d.photo_url || d.avatar || '🐺';
+    buildAvatarGrid('nick-avatar-grid', selectedAvatar, a=>{ selectedAvatar = a; });
+    showScreen('screen-nickname');
+  } else {
+    showScreen('screen-lobby'); socket.emit('get_lobby');
+  }
+});
+
+function buildAvatarGrid(containerId, current, onPick){
+  const c = document.getElementById(containerId);
+  c.innerHTML = AVATAR_LIST.map(a=>`<div class="avatar-opt ${a===current?'selected':''}" data-a="${a}">${a}</div>`).join('');
+  c.querySelectorAll('.avatar-opt').forEach(el=>{
+    el.onclick = ()=>{ c.querySelectorAll('.avatar-opt').forEach(x=>x.classList.remove('selected')); el.classList.add('selected'); onPick(el.dataset.a); };
+  });
+}
+function submitNickname(){
+  const name = document.getElementById('nick-name').value.trim();
+  if(name.length < 2){ toast('Nama minimal 2 karakter'); return; }
+  socket.emit('set_profile', {display_name: name, avatar: selectedAvatar});
+}
+function openProfile(){
+  document.getElementById('profile-name').value = ME.username;
+  selectedAvatarProfile = ME.avatar;
+  document.getElementById('profile-avatar-preview').innerHTML = renderAvatar(ME.avatar);
+  buildAvatarGrid('profile-avatar-grid', ME.avatar, a=>{ selectedAvatarProfile = a; document.getElementById('profile-avatar-preview').innerHTML = renderAvatar(a); });
+  showScreen('screen-profile');
+}
+function closeProfile(){ showScreen('screen-lobby'); socket.emit('get_lobby'); }
+function saveProfile(){
+  const name = document.getElementById('profile-name').value.trim();
+  if(name.length < 2){ toast('Nama minimal 2 karakter'); return; }
+  socket.emit('set_profile', {display_name: name, avatar: selectedAvatarProfile});
+}
+socket.on('profile_updated', d=>{
+  ME.username = d.username; ME.avatar = d.avatar;
+  document.getElementById('lobby-username').innerText = d.username;
+  document.getElementById('lobby-avatar').innerHTML = renderAvatar(d.avatar);
+  toast('Profil disimpan ✅');
   showScreen('screen-lobby'); socket.emit('get_lobby');
 });
+function refreshRoom(){ socket.emit('refresh_room'); }
 
 // LOBBY
 socket.on('lobby_update', rooms=>{
@@ -358,7 +445,7 @@ function renderRoom(room){
   document.getElementById('room-player-count').innerText = `${room.player_count}/${room.max_players} pemain`;
   document.getElementById('room-players').innerHTML = room.players.map(p=>`
     <div class="player-chip ${p.host?'host':''}">
-      <div class="avatar">${p.name.slice(0,2).toUpperCase()}</div>
+      <div class="avatar">${renderAvatar(p.avatar)}</div>
       <div>${p.name}</div>
     </div>`).join('');
   const isHost = room.players.find(p=>p.host && ME && p.id===ME.user_id);
