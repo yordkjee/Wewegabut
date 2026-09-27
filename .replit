@@ -1,0 +1,6 @@
+run = "python app.py"
+entrypoint = "app.py"
+modules = ["python-3.11"]
+
+[env]
+PORT = "8080"
