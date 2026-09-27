@@ -1,18 +1,20 @@
 import sqlite3
 import random
 import hashlib
+import asyncio
 from datetime import datetime
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, List
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, 
-    MessageHandler, filters, ContextTypes
+    MessageHandler, filters, ContextTypes, JobQueue
 )
 
 BOT_TOKEN = "8744113633:AAH5nHMtaqnPUJgkoWQkvMMdxAugg9Agiaw"
 MIN_PLAYERS = 5
 MAX_PLAYERS = 20
 DATABASE_FILE = "werewolf_game.db"
+PHASE_DURATION = 60  # 1 menit per phase
 
 ROLES = {
     'werewolf': {'name': '🐺 Werewolf', 'team': 'evil', 'desc': 'Bunuh 1 pemain malam'},
@@ -36,11 +38,8 @@ ROLES = {
 def init_db():
     conn = sqlite3.connect(DATABASE_FILE)
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (user_id INTEGER PRIMARY KEY, username TEXT UNIQUE, password TEXT, created_at TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS rooms
-                 (room_id INTEGER PRIMARY KEY, room_name TEXT, password TEXT, creator_id INTEGER, 
-                 max_players INTEGER, created_at TEXT, active INTEGER)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT UNIQUE, password TEXT, created_at TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS rooms (room_id INTEGER PRIMARY KEY, room_name TEXT, password TEXT, creator_id INTEGER, max_players INTEGER, created_at TEXT, active INTEGER)''')
     conn.commit()
     conn.close()
 
@@ -53,8 +52,7 @@ def register_user(username: str, password: str) -> bool:
     try:
         conn = sqlite3.connect(DATABASE_FILE)
         c = conn.cursor()
-        c.execute('INSERT INTO users (username, password, created_at) VALUES (?, ?, ?)',
-                 (username, hash_pwd(password), datetime.now().isoformat()))
+        c.execute('INSERT INTO users (username, password, created_at) VALUES (?, ?, ?)', (username, hash_pwd(password), datetime.now().isoformat()))
         conn.commit()
         conn.close()
         return True
@@ -64,24 +62,29 @@ def register_user(username: str, password: str) -> bool:
 def login_user(username: str, password: str) -> Optional[int]:
     conn = sqlite3.connect(DATABASE_FILE)
     c = conn.cursor()
-    c.execute('SELECT user_id FROM users WHERE username = ? AND password = ?',
-             (username, hash_pwd(password)))
+    c.execute('SELECT user_id FROM users WHERE username = ? AND password = ?', (username, hash_pwd(password)))
     result = c.fetchone()
     conn.close()
     return result[0] if result else None
 
 class GameRoom:
-    def __init__(self, room_id, name, password, creator_id, max_players=12):
+    def __init__(self, room_id, name, password, creator_id, max_players=12, chat_id=None):
         self.room_id = room_id
         self.name = name
         self.password = password
         self.creator_id = creator_id
         self.max_players = max_players
+        self.chat_id = chat_id
         self.players = {}
         self.game_active = False
         self.phase = None
         self.day_count = 0
+        self.night_count = 0
         self.votes = {}
+        self.actions = {}
+        self.dead_players = []
+        self.paired_players = []
+        self.protected_player = None
         self.created_at = datetime.now()
     
     def add_player(self, user_id, name) -> Tuple[bool, str]:
@@ -92,14 +95,8 @@ class GameRoom:
         self.players[user_id] = {'name': name, 'role': None, 'alive': True}
         return True, f"✅ {name} join!"
     
-    def remove_player(self, user_id):
-        if user_id in self.players:
-            del self.players[user_id]
-            return True
-        return False
-    
     def assign_roles(self):
-        if len(self.players) < 5:
+        if len(self.players) < MIN_PLAYERS:
             return False
         player_ids = list(self.players.keys())
         random.shuffle(player_ids)
@@ -120,10 +117,9 @@ class GameRoom:
     
     def get_status(self):
         alive = {uid: p for uid, p in self.players.items() if p['alive']}
-        dead = {uid: p for uid, p in self.players.items() if not p['alive']}
         good = sum(1 for p in alive.values() if ROLES.get(p['role'], {}).get('team') == 'good')
         evil = sum(1 for p in alive.values() if ROLES.get(p['role'], {}).get('team') == 'evil')
-        return {'alive': alive, 'dead': dead, 'good': good, 'evil': evil}
+        return {'alive': alive, 'good': good, 'evil': evil}
     
     def check_win(self):
         status = self.get_status()
@@ -137,6 +133,7 @@ rooms: Dict[int, GameRoom] = {}
 user_sessions = {}
 pending_auth = {}
 room_id_counter = 1000
+group_chat_ids = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -155,7 +152,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending_auth[user_id] = {'step': 'reg_user'}
         await query.edit_message_text("✍️ *REGISTER*\n\nBuat username (min 3 char):")
     elif query.data == "help":
-        help_msg = "🐺 *WEREWOLF GAME ADVANCED*\n\n*CARA BERMAIN:*\n1. Register/Login\n2. /rooms\n3. Buat atau join room\n4. Tunggu 5+ pemain\n5. Game start!\n\n*COMMANDS:*\n/start - Menu\n/rooms - Room list\n/create_room - Buat room\n/status - Game status"
+        help_msg = "🐺 *WEREWOLF GAME*\n\n/rooms - Room list\n/create_room - Buat room\n/status - Game status\n/start_game - Mulai game"
         await query.edit_message_text(help_msg, parse_mode="Markdown")
     elif query.data == "create":
         if user_id not in user_sessions:
@@ -165,7 +162,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("📝 Nama room? (min 3 karakter)")
     elif query.data == "no_pass":
         pending_auth[user_id]['has_password'] = False
-        await query.edit_message_text("✅ Room tanpa password. Room dibuat!")
         user_id_val = user_id
         room_name = pending_auth[user_id]['room_name']
         global room_id_counter
@@ -175,7 +171,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rooms[room_id_counter] = room
         user_sessions[user_id_val]['room'] = room_id_counter
         del pending_auth[user_id_val]
-        msg = f"✅ *ROOM DIBUAT!*\n\n*Nama:* {room.name}\n*Password:* 🔓 Tidak\n👥 {len(room.players)}/{room.max_players}"
+        msg = f"✅ *ROOM DIBUAT!*\n\n*Nama:* {room.name}\n*Password:* 🔓 Tidak\n👥 {len(room.players)}/{room.max_players}\n\nTunggu {MIN_PLAYERS - len(room.players)} pemain lagi!"
         await update.effective_chat.send_message(msg, parse_mode="Markdown")
     elif query.data == "yes_pass":
         pending_auth[user_id]['has_password'] = True
@@ -244,7 +240,7 @@ async def rooms_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Login dulu! /start")
         return
     if not rooms:
-        await update.message.reply_text("📭 Tidak ada room.\n\n/create_room untuk buat!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕ Buat Room", callback_data="create")]]))
+        await update.message.reply_text("📭 Tidak ada room.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕ Buat Room", callback_data="create")]]))
         return
     msg = "📋 *DAFTAR ROOM:*\n\n"
     keyboard = []
@@ -279,14 +275,124 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status = room.get_status()
     msg = f"📊 *ROOM: {room.name}*\n\n👥 Pemain: {len(room.players)}/{room.max_players}\n🟢 Good: {status['good']} | ⚫ Evil: {status['evil']}\n"
     if room.game_active:
-        msg += f"🎮 GAME AKTIF - Phase: {room.phase.upper()}"
+        msg += f"🎮 GAME AKTIF\nPhase: {room.phase.upper()}\nHari: {room.day_count}"
     else:
-        need = 5 - len(room.players)
+        need = MIN_PLAYERS - len(room.players)
         if need > 0:
             msg += f"⏳ Tunggu {need} pemain lagi!"
         else:
-            msg += f"✅ Siap dimulai!"
+            msg += f"✅ Siap dimulai! /start_game"
     await update.message.reply_text(msg, parse_mode="Markdown")
+
+async def start_game_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in user_sessions or user_sessions[user_id]['room'] is None:
+        await update.message.reply_text("❌ Anda tidak di room!")
+        return
+    room_id = user_sessions[user_id]['room']
+    room = rooms[room_id]
+    if len(room.players) < MIN_PLAYERS:
+        await update.message.reply_text(f"❌ Minimal {MIN_PLAYERS} pemain!")
+        return
+    if room.game_active:
+        await update.message.reply_text("❌ Game sudah berjalan!")
+        return
+    room.game_active = True
+    room.chat_id = update.effective_chat.id
+    group_chat_ids[room_id] = update.effective_chat.id
+    room.assign_roles()
+    msg = f"🎮 *GAME DIMULAI!* 🎮\n\n👥 Total: {len(room.players)} pemain\n🐺 Werewolves: {sum(1 for p in room.players.values() if p['role'] in ['werewolf', 'mafia_boss'])}\n"
+    msg += "\nRole sudah dikirim via DM!\n\n🌙 FASE MALAM dimulai dalam 5 detik..."
+    await update.effective_chat.send_message(msg, parse_mode="Markdown")
+    for player_id, player in room.players.items():
+        try:
+            role_info = ROLES[player['role']]
+            role_msg = f"🎭 *ROLE MU:* {role_info['name']}\n\n{role_info['desc']}"
+            await context.bot.send_message(chat_id=player_id, text=role_msg, parse_mode="Markdown")
+        except:
+            pass
+    context.job_queue.run_once(lambda ctx: night_phase(ctx, room_id, context.bot), when=5)
+
+async def night_phase(context, room_id, bot):
+    room = rooms[room_id]
+    room.night_count += 1
+    room.phase = 'night'
+    msg = f"🌙 *FASE MALAM KE-{room.night_count}* 🌙\n\n"
+    msg += "Werewolf, Guard, Doctor, Detective - ambil aksi kalian!\n\n⏰ Waktu: 60 detik"
+    await bot.send_message(chat_id=room.chat_id, text=msg, parse_mode="Markdown")
+    context.job_queue.run_once(lambda ctx: day_phase(ctx, room_id, context.bot), when=PHASE_DURATION)
+
+async def day_phase(context, room_id, bot):
+    room = rooms[room_id]
+    room.day_count += 1
+    room.phase = 'day'
+    status = room.get_status()
+    msg = f"☀️ *PAGI KE-{room.day_count}* ☀️\n\n"
+    msg += f"🟢 Alive: {len(status['alive'])}\n💀 Dead: {len(room.dead_players)}\n\n"
+    msg += "Diskusi & voting dalam 60 detik!\n\n"
+    msg += "Ketik nomor pemain untuk vote:"
+    keyboard = []
+    for i, (pid, player) in enumerate(status['alive'].items(), 1):
+        keyboard.append([InlineKeyboardButton(f"{i}. {player['name']}", callback_data=f"vote:{pid}")])
+    await bot.send_message(chat_id=room.chat_id, text=msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    context.job_queue.run_once(lambda ctx: voting_phase(ctx, room_id, context.bot), when=PHASE_DURATION)
+
+async def voting_phase(context, room_id, bot):
+    room = rooms[room_id]
+    room.phase = 'voting'
+    status = room.get_status()
+    alive_list = list(status['alive'].keys())
+    msg = f"🗳️ *VOTING PHASE* 🗳️\n\n"
+    msg += "60 detik terakhir untuk voting!\n\n"
+    keyboard = []
+    for i, pid in enumerate(alive_list, 1):
+        player = room.players[pid]
+        keyboard.append([InlineKeyboardButton(f"{i}. {player['name']}", callback_data=f"final_vote:{pid}")])
+    await bot.send_message(chat_id=room.chat_id, text=msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    context.job_queue.run_once(lambda ctx: count_votes(ctx, room_id, context.bot), when=PHASE_DURATION)
+
+async def count_votes(context, room_id, bot):
+    room = rooms[room_id]
+    if not room.votes:
+        await bot.send_message(chat_id=room.chat_id, text="⚖️ Tidak ada voting!")
+        context.job_queue.run_once(lambda ctx: check_win(ctx, room_id, context.bot), when=2)
+        return
+    vote_count = {}
+    for voter, target in room.votes.items():
+        vote_count[target] = vote_count.get(target, 0) + 1
+    max_votes = max(vote_count.values())
+    most_voted = [pid for pid, votes in vote_count.items() if votes == max_votes]
+    if len(most_voted) > 1:
+        msg = "⚖️ SERI! Voting ulang..."
+        await bot.send_message(chat_id=room.chat_id, text=msg, parse_mode="Markdown")
+        room.votes = {}
+        context.job_queue.run_once(lambda ctx: voting_phase(ctx, room_id, context.bot), when=2)
+        return
+    eliminated_id = most_voted[0]
+    room.players[eliminated_id]['alive'] = False
+    room.dead_players.append(eliminated_id)
+    eliminated = room.players[eliminated_id]
+    msg = f"💀 *{eliminated['name']}* DIELIMINASI!\n\n"
+    msg += f"Role: {ROLES[eliminated['role']]['name']}"
+    await bot.send_message(chat_id=room.chat_id, text=msg, parse_mode="Markdown")
+    context.job_queue.run_once(lambda ctx: check_win(ctx, room_id, context.bot), when=2)
+
+async def check_win(context, room_id, bot):
+    room = rooms[room_id]
+    winner = room.check_win()
+    if winner:
+        status = room.get_status()
+        msg = f"🏆 *GAME SELESAI!* 🏆\n\n"
+        if winner == 'good':
+            msg += "✅ *VILLAGERS MENANG!*\n\nSemua werewolf berhasil dieliminasi!"
+        else:
+            msg += "⚫ *WEREWOLVES MENANG!*\n\nEvil team seimbang atau lebih!"
+        msg += f"\n\n🟢 Good: {status['good']} | ⚫ Evil: {status['evil']}"
+        await bot.send_message(chat_id=room.chat_id, text=msg, parse_mode="Markdown")
+        room.game_active = False
+        return
+    room.votes = {}
+    context.job_queue.run_once(lambda ctx: night_phase(ctx, room_id, context.bot), when=3)
 
 async def main():
     app = Application.builder().token(BOT_TOKEN).build()
@@ -294,6 +400,7 @@ async def main():
     app.add_handler(CommandHandler("rooms", rooms_cmd))
     app.add_handler(CommandHandler("create_room", create_room_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
+    app.add_handler(CommandHandler("start_game", start_game_cmd))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     print("✅ Bot Online! 🐺")
