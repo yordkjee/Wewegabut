@@ -49,13 +49,34 @@ def db():
 def init_db():
     conn = db(); c = conn.cursor()
     c.execute("""CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT,
+        telegram_id INTEGER PRIMARY KEY, display_name TEXT, avatar TEXT,
         wins INTEGER DEFAULT 0, losses INTEGER DEFAULT 0, created_at TEXT)""")
     conn.commit(); conn.close()
 
 init_db()
 
-def hash_pwd(p): return hashlib.sha256(p.encode()).hexdigest()
+DEFAULT_AVATARS = ["🐺","🦊","🐻","🦁","🐯","🐼","🦝","🦉","🐸","🐵","🐲","🦄"]
+
+def get_user(telegram_id):
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT * FROM users WHERE telegram_id=?", (telegram_id,))
+    row = c.fetchone(); conn.close()
+    return dict(row) if row else None
+
+def upsert_user(telegram_id, display_name=None, avatar=None):
+    existing = get_user(telegram_id)
+    conn = db(); c = conn.cursor()
+    if existing:
+        name = display_name if display_name is not None else existing["display_name"]
+        av = avatar if avatar is not None else existing["avatar"]
+        c.execute("UPDATE users SET display_name=?, avatar=? WHERE telegram_id=?", (name, av, telegram_id))
+    else:
+        name = display_name or f"Player{str(telegram_id)[-4:]}"
+        av = avatar or random.choice(DEFAULT_AVATARS)
+        c.execute("INSERT INTO users (telegram_id,display_name,avatar,created_at) VALUES (?,?,?,?)",
+                   (telegram_id, name, av, datetime.now().isoformat()))
+    conn.commit(); conn.close()
+    return get_user(telegram_id)
 
 # ---------------- IN-MEMORY GAME STATE ----------------
 rooms = {}          # room_id -> room dict
@@ -65,7 +86,7 @@ user_sid = {}        # user_id -> sid
 def gen_room_code():
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=5))
 
-def new_room(name, password, max_players, enabled_roles, allow_dup, host_id, host_name):
+def new_room(name, password, max_players, enabled_roles, allow_dup, host_id, host_name, host_avatar="🐺"):
     rid = gen_room_code()
     while rid in rooms:
         rid = gen_room_code()
@@ -77,15 +98,15 @@ def new_room(name, password, max_players, enabled_roles, allow_dup, host_id, hos
         "votes": {}, "night_actions": {}, "lovers": None, "chat": [],
         "created_at": datetime.now().isoformat(),
     }
-    add_player(rooms[rid], host_id, host_name)
+    add_player(rooms[rid], host_id, host_name, host_avatar)
     return rooms[rid]
 
-def add_player(room, user_id, name):
+def add_player(room, user_id, name, avatar="🐺"):
     if user_id in room["players"]:
         return True
     if len(room["players"]) >= room["max_players"]:
         return False
-    room["players"][user_id] = {"name": name, "role": None, "alive": True, "pauses": MAX_PAUSES, "charges": {}}
+    room["players"][user_id] = {"name": name, "avatar": avatar, "role": None, "alive": True, "pauses": MAX_PAUSES, "charges": {}}
     room["order"].append(user_id)
     return True
 
@@ -94,7 +115,7 @@ def public_room_state(room):
         "id": room["id"], "name": room["name"], "has_password": bool(room["password"]),
         "max_players": room["max_players"], "player_count": len(room["players"]),
         "active": room["active"],
-        "players": [{"id": pid, "name": p["name"], "alive": p["alive"], "host": pid == room["host_id"]}
+        "players": [{"id": pid, "name": p["name"], "avatar": p.get("avatar","🐺"), "alive": p["alive"], "host": pid == room["host_id"]}
                     for pid, p in room["players"].items()],
         "enabled_roles": room["enabled_roles"], "allow_dup": room["allow_dup"],
         "phase": room["phase"], "day_count": room["day_count"], "night_count": room["night_count"],
@@ -187,35 +208,34 @@ def on_disconnect():
     if info:
         user_sid.pop(info["user_id"], None)
 
-@socketio.on("register")
-def on_register(data):
-    u, p = data.get("username", "").strip(), data.get("password", "")
-    if len(u) < 3 or len(p) < 4:
-        emit("auth_error", {"message": "Username min 3, password min 4 karakter"}); return
-    conn = db(); c = conn.cursor()
-    try:
-        c.execute("INSERT INTO users (username,password,created_at) VALUES (?,?,?)", (u, hash_pwd(p), datetime.now().isoformat()))
-        conn.commit()
-        uid = c.lastrowid
-        conn.close()
-        sid_to_user[request.sid] = {"user_id": uid, "username": u, "room_id": None}
-        user_sid[uid] = request.sid
-        emit("auth_success", {"user_id": uid, "username": u})
-    except sqlite3.IntegrityError:
-        conn.close()
-        emit("auth_error", {"message": "Username sudah dipakai"})
+@socketio.on("telegram_auth")
+def on_telegram_auth(data):
+    tid = data.get("telegram_id")
+    if not tid:
+        emit("auth_error", {"message": "Tidak bisa deteksi akun Telegram"}); return
+    tid = int(tid)
+    existing = get_user(tid)
+    suggested_name = (data.get("first_name") or "Player").strip()
+    photo = data.get("photo_url")
+    if existing:
+        sid_to_user[request.sid] = {"user_id": tid, "username": existing["display_name"], "avatar": existing["avatar"], "room_id": None}
+        user_sid[tid] = request.sid
+        emit("auth_success", {"user_id": tid, "username": existing["display_name"], "avatar": existing["avatar"], "needs_nickname": False})
+    else:
+        sid_to_user[request.sid] = {"user_id": tid, "username": suggested_name, "avatar": photo or random.choice(DEFAULT_AVATARS), "room_id": None}
+        user_sid[tid] = request.sid
+        emit("auth_success", {"user_id": tid, "username": suggested_name, "avatar": photo or "🐺", "needs_nickname": True, "suggested_name": suggested_name, "photo_url": photo})
 
-@socketio.on("login")
-def on_login(data):
-    u, p = data.get("username", "").strip(), data.get("password", "")
-    conn = db(); c = conn.cursor()
-    c.execute("SELECT id,username FROM users WHERE username=? AND password=?", (u, hash_pwd(p)))
-    row = c.fetchone(); conn.close()
-    if not row:
-        emit("auth_error", {"message": "Username / password salah"}); return
-    sid_to_user[request.sid] = {"user_id": row["id"], "username": row["username"], "room_id": None}
-    user_sid[row["id"]] = request.sid
-    emit("auth_success", {"user_id": row["id"], "username": row["username"]})
+@socketio.on("set_profile")
+def on_set_profile(data):
+    info = sid_to_user.get(request.sid)
+    if not info:
+        emit("error_msg", {"message": "Sesi tidak valid, buka ulang app"}); return
+    name = (data.get("display_name") or "").strip()[:20] or info["username"]
+    avatar = data.get("avatar") or info.get("avatar") or "🐺"
+    user = upsert_user(info["user_id"], name, avatar)
+    info["username"] = user["display_name"]; info["avatar"] = user["avatar"]
+    emit("profile_updated", {"username": user["display_name"], "avatar": user["avatar"]})
 
 @socketio.on("get_lobby")
 def on_get_lobby():
@@ -232,6 +252,7 @@ def on_create_room(data):
         data.get("name", "Room")[:24], data.get("password") or None,
         max(MIN_PLAYERS, min(MAX_PLAYERS, int(data.get("max_players", 12)))),
         enabled, bool(data.get("allow_dup", True)), info["user_id"], info["username"],
+        info.get("avatar", "🐺"),
     )
     info["room_id"] = room["id"]
     sio_join(room["id"])
@@ -251,13 +272,21 @@ def on_join_room(data):
         emit("error_msg", {"message": "Password salah"}); return
     if room["active"]:
         emit("error_msg", {"message": "Game sudah dimulai"}); return
-    if not add_player(room, info["user_id"], info["username"]):
+    if not add_player(room, info["user_id"], info["username"], info.get("avatar", "🐺")):
         emit("error_msg", {"message": "Room penuh"}); return
     info["room_id"] = rid
     sio_join(rid)
     socketio.emit("room_state", public_room_state(room), room=rid)
     emit("room_joined", public_room_state(room))
     socketio.emit("lobby_update", lobby_list())
+
+@socketio.on("refresh_room")
+def on_refresh_room(data=None):
+    info = sid_to_user.get(request.sid)
+    if not info or not info.get("room_id"): return
+    room = rooms.get(info["room_id"])
+    if not room: return
+    emit("room_state", public_room_state(room))
 
 @socketio.on("leave_room_ev")
 def on_leave_room(data):
