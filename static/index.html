@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Werewolf Game</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<style>
+:root{
+  --bg:#0f1220; --bg2:#171b30; --card:#1e2340; --accent:#e94560; --accent2:#f9a826;
+  --good:#4fd1a5; --evil:#e94560; --text:#eef0ff; --muted:#8b8fb0; --night:#0a0e1f; --day:#2b3a67;
+}
+*{box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent;}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  background:linear-gradient(160deg,var(--bg),var(--bg2)); color:var(--text);
+  min-height:100vh; overflow-x:hidden;
+}
+.screen{display:none; min-height:100vh; padding:16px; animation:fadeIn .35s ease;}
+.screen.active{display:flex; flex-direction:column;}
+@keyframes fadeIn{from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:translateY(0);}}
+
+h1,h2,h3{font-weight:700;}
+.title{font-size:26px; text-align:center; margin-bottom:4px;}
+.subtitle{color:var(--muted); text-align:center; font-size:13px; margin-bottom:24px;}
+.wolf-emoji{font-size:56px; text-align:center; display:block; margin-bottom:8px; animation:float 3s ease-in-out infinite;}
+@keyframes float{0%,100%{transform:translateY(0);}50%{transform:translateY(-8px);}}
+
+.card{background:var(--card); border-radius:16px; padding:18px; margin-bottom:14px; box-shadow:0 4px 20px rgba(0,0,0,.25);}
+input,select{
+  width:100%; padding:13px 14px; border-radius:12px; border:1px solid #333a5c; background:#12162b;
+  color:var(--text); font-size:15px; margin-bottom:12px; outline:none;
+}
+input:focus{border-color:var(--accent);}
+label{font-size:13px; color:var(--muted); display:block; margin-bottom:6px;}
+button{
+  border:none; border-radius:12px; padding:14px; font-size:15px; font-weight:600; cursor:pointer;
+  width:100%; transition:transform .12s, opacity .12s;
+}
+button:active{transform:scale(.97);}
+.btn-primary{background:linear-gradient(135deg,var(--accent),#c81e45); color:#fff;}
+.btn-secondary{background:#2a3055; color:var(--text);}
+.btn-gold{background:linear-gradient(135deg,var(--accent2),#c9820f); color:#1a1a1a;}
+.btn-small{padding:8px 14px; width:auto; font-size:13px; border-radius:10px;}
+.btn-danger{background:#3a1830; color:var(--evil); border:1px solid var(--evil);}
+.row{display:flex; gap:10px;}
+.row > *{flex:1;}
+.tabs{display:flex; background:#12162b; border-radius:12px; padding:4px; margin-bottom:18px;}
+.tab{flex:1; text-align:center; padding:10px; border-radius:9px; cursor:pointer; color:var(--muted); font-weight:600; font-size:14px;}
+.tab.active{background:var(--accent); color:#fff;}
+.error-box{background:#3a1420; color:#ff8fa3; padding:10px 14px; border-radius:10px; font-size:13px; margin-bottom:10px; display:none;}
+
+/* LOBBY */
+.topbar{display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;}
+.roomlist{flex:1; overflow-y:auto;}
+.room-item{background:var(--card); border-radius:14px; padding:14px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;}
+.room-item .meta{font-size:12px; color:var(--muted); margin-top:2px;}
+.fab{position:fixed; bottom:22px; right:22px; width:58px; height:58px; border-radius:50%; background:var(--accent); font-size:26px; display:flex; align-items:center; justify-content:center; box-shadow:0 6px 20px rgba(233,69,96,.5); z-index:20;}
+
+.modal-overlay{position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:flex-end; z-index:30;}
+.modal-overlay.active{display:flex;}
+.modal{background:var(--bg2); border-radius:20px 20px 0 0; padding:20px; width:100%; max-height:85vh; overflow-y:auto; animation:slideUp .25s ease;}
+@keyframes slideUp{from{transform:translateY(100%);} to{transform:translateY(0);}}
+.role-toggle{display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid #262b4a;}
+.role-toggle .rname{font-size:14px;}
+.role-toggle .rdesc{font-size:11px; color:var(--muted);}
+.switch{width:44px; height:26px; background:#333a5c; border-radius:20px; position:relative; cursor:pointer; flex-shrink:0;}
+.switch.on{background:var(--good);}
+.switch::after{content:''; position:absolute; width:20px; height:20px; background:#fff; border-radius:50%; top:3px; left:3px; transition:left .15s;}
+.switch.on::after{left:21px;}
+
+/* ROOM */
+.player-grid{display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:14px;}
+.player-chip{background:var(--card); border-radius:12px; padding:10px 6px; text-align:center; font-size:12px; position:relative;}
+.player-chip.dead{opacity:.35;}
+.player-chip.host::after{content:'👑'; position:absolute; top:-6px; right:-4px; font-size:14px;}
+.avatar{width:40px; height:40px; border-radius:50%; background:linear-gradient(135deg,var(--accent2),var(--accent)); margin:0 auto 6px; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:15px;}
+
+.chatbox{background:var(--card); border-radius:14px; padding:10px; flex:1; display:flex; flex-direction:column; min-height:160px; max-height:220px;}
+.chat-messages{flex:1; overflow-y:auto; margin-bottom:8px;}
+.chat-msg{font-size:13px; margin-bottom:6px; animation:fadeIn .2s;}
+.chat-msg .u{color:var(--accent2); font-weight:600;}
+.chat-input-row{display:flex; gap:8px;}
+.chat-input-row input{margin-bottom:0;}
+
+/* GAME */
+.phase-banner{border-radius:18px; padding:22px 16px; text-align:center; margin-bottom:14px; transition:background 1s ease;}
+.phase-banner.night{background:radial-gradient(circle at top,#1a2040,var(--night));}
+.phase-banner.day{background:radial-gradient(circle at top,#3d5a99,var(--day));}
+.phase-banner.voting{background:radial-gradient(circle at top,#5a2340,#3a1428);}
+.phase-icon{font-size:40px; animation:pulse 2s infinite;}
+@keyframes pulse{0%,100%{transform:scale(1);} 50%{transform:scale(1.08);}}
+.phase-title{font-size:20px; font-weight:700; margin-top:6px;}
+.timer-ring{width:70px; height:70px; margin:10px auto 0; position:relative;}
+.timer-text{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:18px;}
+
+.role-card{perspective:1000px; margin-bottom:14px;}
+.role-card-inner{position:relative; width:100%; height:130px; transform-style:preserve-3d; transition:transform .7s; border-radius:16px;}
+.role-card.flipped .role-card-inner{transform:rotateY(180deg);}
+.role-face{position:absolute; inset:0; backface-visibility:hidden; border-radius:16px; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:10px;}
+.role-front{background:linear-gradient(135deg,#2a3055,#1e2340);}
+.role-back{background:linear-gradient(135deg,var(--accent),#7b1e3a); transform:rotateY(180deg);}
+.role-back .rname{font-size:19px; font-weight:700;}
+.role-back .rdesc{font-size:12px; margin-top:6px; opacity:.9; text-align:center;}
+
+.action-panel{background:var(--card); border-radius:14px; padding:14px; margin-bottom:14px;}
+.target-grid{display:grid; grid-template-columns:repeat(2,1fr); gap:8px; margin-top:10px;}
+.target-btn{background:#2a3055; border-radius:10px; padding:10px; font-size:13px; text-align:center;}
+.target-btn.selected{background:var(--accent);}
+
+.death-alert{background:#2a1020; border:1px solid var(--evil); border-radius:12px; padding:12px; margin-bottom:10px; animation:shake .4s;}
+@keyframes shake{0%,100%{transform:translateX(0);}25%{transform:translateX(-4px);}75%{transform:translateX(4px);}}
+
+.gameover-banner{text-align:center; padding:30px 16px;}
+.gameover-banner.good{background:radial-gradient(circle,#123d2e,var(--bg));}
+.gameover-banner.evil{background:radial-gradient(circle,#3d1220,var(--bg));}
+.win-title{font-size:28px; font-weight:800; margin:10px 0;}
+.reveal-list{margin-top:16px; text-align:left;}
+.reveal-item{display:flex; justify-content:space-between; background:var(--card); padding:10px 14px; border-radius:10px; margin-bottom:6px; font-size:13px;}
+
+.pause-badge{position:fixed; top:14px; right:16px; background:var(--card); border-radius:20px; padding:6px 12px; font-size:12px; z-index:15;}
+.paused-overlay{position:fixed; inset:0; background:rgba(0,0,0,.75); display:none; align-items:center; justify-content:center; z-index:40; flex-direction:column;}
+.paused-overlay.active{display:flex;}
+.paused-overlay .txt{font-size:22px; font-weight:700; margin-bottom:6px;}
+
+.toast{position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--card); padding:10px 18px; border-radius:20px; font-size:13px; z-index:50; opacity:0; transition:opacity .3s;}
+.toast.show{opacity:1;}
+::-webkit-scrollbar{width:4px;} ::-webkit-scrollbar-thumb{background:#333a5c; border-radius:4px;}
+</style>
+</head>
+<body>
+
+<!-- AUTH -->
+<div id="screen-auth" class="screen active">
+  <span class="wolf-emoji">🐺</span>
+  <div class="title">Werewolf Game</div>
+  <div class="subtitle">Balance smart roles • Realtime • Chat</div>
+  <div class="card">
+    <div class="tabs">
+      <div class="tab active" id="tab-login" onclick="switchTab('login')">Login</div>
+      <div class="tab" id="tab-register" onclick="switchTab('register')">Register</div>
+    </div>
+    <div class="error-box" id="auth-error"></div>
+    <label>Username</label>
+    <input id="auth-username" placeholder="Username">
+    <label>Password</label>
+    <input id="auth-password" type="password" placeholder="Password">
+    <button class="btn-primary" id="auth-submit" onclick="submitAuth()">Masuk</button>
+  </div>
+</div>
+
+<!-- LOBBY -->
+<div id="screen-lobby" class="screen">
+  <div class="topbar">
+    <div>
+      <div style="font-size:18px;font-weight:700;">👋 <span id="lobby-username"></span></div>
+      <div class="subtitle" style="margin:0;text-align:left;">Pilih room atau buat baru</div>
+    </div>
+    <button class="btn-secondary btn-small" onclick="location.reload()">🔄</button>
+  </div>
+  <div class="roomlist" id="room-list"></div>
+  <div class="fab" onclick="openCreateModal()">➕</div>
+</div>
+
+<!-- CREATE ROOM MODAL -->
+<div class="modal-overlay" id="create-modal">
+  <div class="modal">
+    <h3 style="margin-bottom:14px;">🎮 Buat Room</h3>
+    <label>Nama Room</label>
+    <input id="cr-name" placeholder="Room seru-seruan">
+    <label>Password (opsional)</label>
+    <input id="cr-password" placeholder="Kosongkan jika tidak perlu">
+    <label>Maksimal Pemain: <span id="cr-max-label">12</span></label>
+    <input id="cr-max" type="range" min="5" max="20" value="12" oninput="document.getElementById('cr-max-label').innerText=this.value">
+    <div class="row" style="margin-bottom:10px;">
+      <div style="font-size:13px;color:var(--muted);">Role boleh double (auto-balance)</div>
+      <div class="switch on" id="cr-dup" onclick="this.classList.toggle('on')" style="margin-left:auto;"></div>
+    </div>
+    <h3 style="margin:14px 0 6px;font-size:15px;">Role Opsional (Werewolf & Villager selalu aktif)</h3>
+    <div id="role-toggle-list"></div>
+    <div class="row" style="margin-top:16px;">
+      <button class="btn-secondary" onclick="closeCreateModal()">Batal</button>
+      <button class="btn-primary" onclick="createRoom()">Buat Room</button>
+    </div>
+  </div>
+</div>
+
+<!-- ROOM (WAITING) -->
+<div id="screen-room" class="screen">
+  <div class="topbar">
+    <div>
+      <div style="font-size:18px;font-weight:700;" id="room-name-title">Room</div>
+      <div class="subtitle" style="margin:0;text-align:left;" id="room-code-label">Code: -</div>
+    </div>
+    <button class="btn-danger btn-small" onclick="leaveRoom()">Keluar</button>
+  </div>
+  <div class="card">
+    <div style="font-size:13px;color:var(--muted);margin-bottom:8px;" id="room-player-count">0/12 pemain</div>
+    <div class="player-grid" id="room-players"></div>
+  </div>
+  <div class="chatbox">
+    <div class="chat-messages" id="room-chat"></div>
+    <div class="chat-input-row">
+      <input id="room-chat-input" placeholder="Ketik pesan..." onkeydown="if(event.key==='Enter')sendChat()">
+      <button class="btn-gold btn-small" onclick="sendChat()">Kirim</button>
+    </div>
+  </div>
+  <div style="margin-top:14px;" id="room-start-wrap">
+    <button class="btn-primary" id="btn-start-game" onclick="startGame()">🚀 Mulai Game</button>
+  </div>
+</div>
+
+<!-- GAME -->
+<div id="screen-game" class="screen">
+  <div class="pause-badge">⏸️ <span id="pause-count">2</span>/2 <button class="btn-small btn-gold" style="width:auto;padding:4px 10px;margin-left:6px;display:inline-block;" onclick="pauseGame()">Pause</button></div>
+
+  <div class="role-card" id="role-card">
+    <div class="role-card-inner">
+      <div class="role-face role-front"><div style="font-size:30px;">🎭</div><div style="font-size:12px;color:var(--muted);margin-top:6px;">Tap untuk lihat role</div></div>
+      <div class="role-face role-back">
+        <div class="rname" id="role-name">-</div>
+        <div class="rdesc" id="role-desc">-</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="phase-banner night" id="phase-banner">
+    <div class="phase-icon" id="phase-icon">🌙</div>
+    <div class="phase-title" id="phase-title">Malam 1</div>
+    <div class="timer-ring"><div class="timer-text" id="phase-timer">--</div></div>
+  </div>
+
+  <div id="death-alerts"></div>
+
+  <div class="action-panel" id="action-panel" style="display:none;">
+    <div id="action-title" style="font-weight:600;font-size:14px;">Aksi</div>
+    <div class="target-grid" id="action-targets"></div>
+    <button class="btn-primary" style="margin-top:10px;" onclick="submitAction()">Konfirmasi</button>
+  </div>
+
+  <div class="card" id="vote-panel" style="display:none;">
+    <div style="font-weight:600;margin-bottom:8px;">🗳️ Vote eliminasi</div>
+    <div class="target-grid" id="vote-targets"></div>
+  </div>
+
+  <div class="chatbox">
+    <div class="chat-messages" id="game-chat"></div>
+    <div class="chat-input-row">
+      <input id="game-chat-input" placeholder="Chat..." onkeydown="if(event.key==='Enter')sendGameChat()">
+      <button class="btn-gold btn-small" onclick="sendGameChat()">Kirim</button>
+    </div>
+  </div>
+</div>
+
+<!-- GAME OVER -->
+<div id="screen-gameover" class="screen">
+  <div class="gameover-banner" id="gameover-banner">
+    <div style="font-size:50px;" id="gameover-icon">🏆</div>
+    <div class="win-title" id="gameover-title">-</div>
+    <div class="reveal-list" id="gameover-reveal"></div>
+    <button class="btn-primary" style="margin-top:20px;" onclick="backToLobby()">Kembali ke Lobby</button>
+  </div>
+</div>
+
+<div class="paused-overlay" id="paused-overlay">
+  <div class="txt">⏸️ GAME DIPAUSE</div>
+  <div id="paused-by" style="color:var(--muted);font-size:13px;"></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+try{ Telegram.WebApp.ready(); Telegram.WebApp.expand(); }catch(e){}
+
+const socket = io();
+let ME = null, CURRENT_ROOM = null, ROLES_META = {}, MY_ROLE = null, SELECTED_TARGET = null, SELECTED_TARGET2 = null, CURRENT_ACTION = null;
+let authMode = 'login';
+
+function toast(msg){
+  const t = document.getElementById('toast'); t.innerText = msg; t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 2200);
+}
+function showScreen(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+function switchTab(mode){
+  authMode = mode;
+  document.getElementById('tab-login').classList.toggle('active', mode==='login');
+  document.getElementById('tab-register').classList.toggle('active', mode==='register');
+  document.getElementById('auth-submit').innerText = mode==='login' ? 'Masuk' : 'Daftar';
+}
+function submitAuth(){
+  const u = document.getElementById('auth-username').value.trim();
+  const p = document.getElementById('auth-password').value;
+  document.getElementById('auth-error').style.display='none';
+  socket.emit(authMode, {username:u, password:p});
+}
+socket.on('auth_error', d=>{
+  const e = document.getElementById('auth-error'); e.innerText = d.message; e.style.display='block';
+});
+socket.on('auth_success', d=>{
+  ME = d; document.getElementById('lobby-username').innerText = d.username;
+  showScreen('screen-lobby'); socket.emit('get_lobby');
+});
+
+// LOBBY
+socket.on('lobby_update', rooms=>{
+  const list = document.getElementById('room-list');
+  if(!rooms.length){ list.innerHTML = '<div class="subtitle">Belum ada room. Buat yang pertama!</div>'; return; }
+  list.innerHTML = rooms.map(r=>`
+    <div class="room-item">
+      <div>
+        <div style="font-weight:600;">${r.has_password?'🔐':'🔓'} ${r.name}</div>
+        <div class="meta">👥 ${r.player_count}/${r.max_players}</div>
+      </div>
+      <button class="btn-gold btn-small" onclick="joinRoomPrompt('${r.id}', ${r.has_password})">Join</button>
+    </div>`).join('');
+});
+function joinRoomPrompt(rid, hasPass){
+  let pw = null;
+  if(hasPass){ pw = prompt('Masukkan password room:'); if(pw===null) return; }
+  socket.emit('join_room_ev', {room_id: rid, password: pw});
+}
+
+// CREATE MODAL
+fetch('/api/roles').then(r=>r.json()).then(d=>{
+  ROLES_META = d.roles;
+  const list = document.getElementById('role-toggle-list');
+  list.innerHTML = d.optional.map(key=>{
+    const r = d.roles[key]; const on = d.default_enabled.includes(key);
+    return `<div class="role-toggle">
+      <div><div class="rname">${r.name}</div><div class="rdesc">${r.desc}</div></div>
+      <div class="switch ${on?'on':''}" data-role="${key}" onclick="this.classList.toggle('on')"></div>
+    </div>`;
+  }).join('');
+});
+function openCreateModal(){ document.getElementById('create-modal').classList.add('active'); }
+function closeCreateModal(){ document.getElementById('create-modal').classList.remove('active'); }
+function createRoom(){
+  const name = document.getElementById('cr-name').value.trim() || 'Room Seru';
+  const password = document.getElementById('cr-password').value.trim() || null;
+  const max_players = parseInt(document.getElementById('cr-max').value);
+  const allow_dup = document.getElementById('cr-dup').classList.contains('on');
+  const enabled_roles = [...document.querySelectorAll('#role-toggle-list .switch.on')].map(e=>e.dataset.role);
+  socket.emit('create_room', {name, password, max_players, allow_dup, enabled_roles});
+  closeCreateModal();
+}
+
+// ROOM
+socket.on('room_joined', renderRoom);
+socket.on('room_state', d=>{ if(CURRENT_ROOM && d.id===CURRENT_ROOM.id) renderRoom(d); });
+function renderRoom(room){
+  CURRENT_ROOM = room;
+  showScreen('screen-room');
+  document.getElementById('room-name-title').innerText = room.name;
+  document.getElementById('room-code-label').innerText = 'Code: ' + room.id;
+  document.getElementById('room-player-count').innerText = `${room.player_count}/${room.max_players} pemain`;
+  document.getElementById('room-players').innerHTML = room.players.map(p=>`
+    <div class="player-chip ${p.host?'host':''}">
+      <div class="avatar">${p.name.slice(0,2).toUpperCase()}</div>
+      <div>${p.name}</div>
+    </div>`).join('');
+  const isHost = room.players.find(p=>p.host && ME && p.id===ME.user_id);
+  document.getElementById('room-start-wrap').style.display = isHost ? 'block' : 'none';
+  document.getElementById('btn-start-game').disabled = room.player_count < 5;
+  document.getElementById('btn-start-game').innerText = room.player_count < 5 ? `Min 5 pemain (${room.player_count}/5)` : '🚀 Mulai Game';
+}
+function leaveRoom(){ socket.emit('leave_room_ev'); showScreen('screen-lobby'); socket.emit('get_lobby'); }
+function sendChat(){
+  const inp = document.getElementById('room-chat-input');
+  if(!inp.value.trim()) return;
+  socket.emit('send_chat', {text: inp.value}); inp.value='';
+}
+socket.on('chat_message', m=>{
+  ['room-chat','game-chat'].forEach(id=>{
+    const box = document.getElementById(id); if(!box) return;
+    const el = document.createElement('div');
+    el.className='chat-msg'; el.innerHTML = `<span class="u">${m.user}:</span> ${m.text}`;
+    box.appendChild(el); box.scrollTop = box.scrollHeight;
+  });
+});
+function sendGameChat(){
+  const inp = document.getElementById('game-chat-input');
+  if(!inp.value.trim()) return;
+  socket.emit('send_chat', {text: inp.value}); inp.value='';
+}
+function startGame(){ socket.emit('start_game'); }
+
+// GAME
+socket.on('your_role', d=>{
+  MY_ROLE = d.role;
+  document.getElementById('role-name').innerText = d.info.name;
+  document.getElementById('role-desc').innerText = d.info.desc;
+});
+socket.on('game_started', room=>{
+  CURRENT_ROOM = room; showScreen('screen-game');
+  document.getElementById('role-card').classList.remove('flipped');
+});
+document.getElementById('role-card').addEventListener('click', function(){ this.classList.toggle('flipped'); });
+
+let timerInterval = null;
+socket.on('phase_change', d=>{
+  const banner = document.getElementById('phase-banner');
+  banner.className = 'phase-banner ' + d.phase;
+  const icon = {night:'🌙', day:'☀️', voting:'🗳️'}[d.phase];
+  const title = {night:`Malam ${d.n||''}`, day:`Siang ${d.n||''}`, voting:'Voting'}[d.phase];
+  document.getElementById('phase-icon').innerText = icon;
+  document.getElementById('phase-title').innerText = title;
+  document.getElementById('death-alerts').innerHTML = '';
+  document.getElementById('action-panel').style.display = 'none';
+  document.getElementById('vote-panel').style.display = 'none';
+  SELECTED_TARGET = null; SELECTED_TARGET2 = null;
+
+  let t = d.duration;
+  document.getElementById('phase-timer').innerText = t + 's';
+  clearInterval(timerInterval);
+  timerInterval = setInterval(()=>{
+    t--; document.getElementById('phase-timer').innerText = Math.max(t,0) + 's';
+    if(t<=0) clearInterval(timerInterval);
+  }, 1000);
+
+  if(d.phase === 'night') setupNightAction();
+  if(d.phase === 'day') setupVoting(d.alive, false);
+  if(d.phase === 'voting') setupVoting(d.alive, true);
+});
+
+function setupNightAction(){
+  const panel = document.getElementById('action-panel');
+  const actionsMap = {
+    werewolf: ['werewolf_kill','Pilih korban 🐺'], mafia_boss: ['werewolf_kill','Pilih korban 👑'],
+    guard: ['guard_protect','Lindungi pemain 🛡️'], doctor: ['doctor_heal','Sembuhkan pemain 👨‍⚕️'],
+    detective: ['detective_inspect','Selidiki pemain 🔍'],
+  };
+  if(actionsMap[MY_ROLE]){
+    const [action, title] = actionsMap[MY_ROLE];
+    CURRENT_ACTION = action;
+    document.getElementById('action-title').innerText = title;
+    panel.style.display = 'block';
+    renderTargets('action-targets', CURRENT_ROOM.players.filter(p=>p.alive), false);
+  } else if(MY_ROLE === 'witch'){
+    CURRENT_ACTION = 'witch_poison';
+    document.getElementById('action-title').innerText = '🧙 Racuni pemain (opsional)';
+    panel.style.display = 'block';
+    renderTargets('action-targets', CURRENT_ROOM.players.filter(p=>p.alive), false);
+  } else if(MY_ROLE === 'cupid'){
+    CURRENT_ACTION = 'cupid_pair';
+    document.getElementById('action-title').innerText = '💘 Pilih 2 pemain untuk dipasangkan';
+    panel.style.display = 'block';
+    renderTargets('action-targets', CURRENT_ROOM.players.filter(p=>p.alive), true);
+  } else if(MY_ROLE === 'puppeteer'){
+    CURRENT_ACTION = 'puppeteer_force';
+    document.getElementById('action-title').innerText = '🎪 Paksa vote pemain (opsional)';
+    panel.style.display = 'block';
+    renderTargets('action-targets', CURRENT_ROOM.players.filter(p=>p.alive), true);
+  } else {
+    panel.style.display = 'none';
+  }
+}
+function renderTargets(containerId, players, doublePick){
+  const c = document.getElementById(containerId);
+  c.innerHTML = players.map(p=>`<div class="target-btn" data-id="${p.id}" onclick="selectTarget('${containerId}','${p.id}', ${doublePick})">${p.name}</div>`).join('');
+}
+function selectTarget(containerId, pid, doublePick){
+  if(!doublePick){
+    SELECTED_TARGET = pid;
+    document.querySelectorAll('#'+containerId+' .target-btn').forEach(b=>b.classList.toggle('selected', b.dataset.id===pid));
+  } else {
+    if(SELECTED_TARGET === pid){ SELECTED_TARGET=null; }
+    else if(!SELECTED_TARGET){ SELECTED_TARGET = pid; }
+    else if(SELECTED_TARGET2 === pid){ SELECTED_TARGET2=null; }
+    else if(!SELECTED_TARGET2){ SELECTED_TARGET2 = pid; }
+    document.querySelectorAll('#'+containerId+' .target-btn').forEach(b=>{
+      b.classList.toggle('selected', b.dataset.id===SELECTED_TARGET || b.dataset.id===SELECTED_TARGET2);
+    });
+  }
+}
+function submitAction(){
+  if(!SELECTED_TARGET){ toast('Pilih target dulu'); return; }
+  socket.emit('night_action', {action: CURRENT_ACTION, target: SELECTED_TARGET, target2: SELECTED_TARGET2});
+  toast('Aksi dikirim ✅');
+  document.getElementById('action-panel').style.display = 'none';
+}
+socket.on('action_result', d=> toast(d.message));
+
+function setupVoting(alive, isFinal){
+  document.getElementById('vote-panel').style.display = 'block';
+  document.getElementById('vote-panel').querySelector('div').innerText = isFinal ? '🗳️ Vote Final' : '💬 Diskusi (vote awal boleh)';
+  renderTargets('vote-targets', alive.map(a=>({id:a.id, name:a.name, alive:true})), false);
+  document.querySelectorAll('#vote-targets .target-btn').forEach(b=>{
+    b.onclick = ()=>{ document.querySelectorAll('#vote-targets .target-btn').forEach(x=>x.classList.remove('selected')); b.classList.add('selected'); socket.emit('cast_vote', {target: b.dataset.id}); };
+  });
+}
+
+socket.on('night_result', d=>{
+  const box = document.getElementById('death-alerts');
+  if(d.deaths.length===0){ box.innerHTML = '<div class="death-alert">🌤️ Tidak ada yang meninggal malam ini</div>'; }
+  else { box.innerHTML = d.deaths.map(n=>`<div class="death-alert">💀 <b>${n}</b> ditemukan tewas!</div>`).join(''); }
+});
+socket.on('vote_result', d=>{
+  const box = document.getElementById('death-alerts');
+  const el = document.createElement('div'); el.className='death-alert';
+  el.innerHTML = d.eliminated ? `⚖️ ${d.message} (Role: ${d.role})` : `⚖️ ${d.message}`;
+  box.appendChild(el);
+});
+
+socket.on('game_paused', d=>{
+  document.getElementById('paused-overlay').classList.add('active');
+  document.getElementById('paused-by').innerText = `Dipause oleh ${d.by} • otomatis lanjut 20 detik`;
+});
+socket.on('game_resumed', ()=>{ document.getElementById('paused-overlay').classList.remove('active'); });
+function pauseGame(){ socket.emit('pause_game'); }
+socket.on('action_ack', ()=>{});
+
+socket.on('game_over', d=>{
+  showScreen('screen-gameover');
+  const banner = document.getElementById('gameover-banner');
+  banner.className = 'gameover-banner ' + d.winner;
+  document.getElementById('gameover-icon').innerText = d.winner==='good' ? '🎉' : '🐺';
+  document.getElementById('gameover-title').innerText = d.winner==='good' ? 'VILLAGERS MENANG!' : 'WEREWOLVES MENANG!';
+  document.getElementById('gameover-reveal').innerHTML = d.reveal.map(p=>`
+    <div class="reveal-item"><span>${p.name}</span><span>${p.role} ${p.alive?'✅':'💀'}</span></div>`).join('');
+});
+function backToLobby(){ CURRENT_ROOM=null; showScreen('screen-lobby'); socket.emit('get_lobby'); }
+socket.on('error_msg', d=> toast(d.message));
+</script>
+</body>
+</html>
