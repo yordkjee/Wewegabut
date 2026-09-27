@@ -2,11 +2,11 @@ import sqlite3
 import random
 import hashlib
 from datetime import datetime
-from typing import Dict, Tuple, Optional, List
+from typing import Dict, Tuple, Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, 
-    MessageHandler, filters, ContextTypes, JobQueue
+    MessageHandler, filters, ContextTypes
 )
 
 BOT_TOKEN = "8744113633:AAH5nHMtaqnPUJgkoWQkvMMdxAugg9Agiaw"
@@ -18,22 +18,22 @@ PAUSE_DURATION = 20
 MAX_PAUSES = 2
 
 ROLES = {
-    'werewolf': {'name': '🐺 Werewolf', 'team': 'evil', 'desc': 'Bunuh 1 pemain malam'},
-    'villager': {'name': '👨 Villager', 'team': 'good', 'desc': 'Vote eliminasi'},
-    'guard': {'name': '🛡️ Guard', 'team': 'good', 'desc': 'Protect pemain'},
-    'doctor': {'name': '👨‍⚕️ Doctor', 'team': 'good', 'desc': 'Heal korban'},
-    'detective': {'name': '🔍 Detective', 'team': 'good', 'desc': 'Cek role pemain'},
-    'mafia_boss': {'name': '👑 Mafia Boss', 'team': 'evil', 'desc': 'Leader evil team'},
-    'cupid': {'name': '💘 Cupid', 'team': 'good', 'desc': 'Pair 2 pemain'},
-    'illusionist': {'name': '🎭 Illusionist', 'team': 'good', 'desc': 'Ubah vote'},
-    'spy': {'name': '🕵️ Spy', 'team': 'good', 'desc': 'Lihat chat evil'},
-    'judge': {'name': '⚖️ Judge', 'team': 'good', 'desc': 'Veto eliminasi'},
-    'witch': {'name': '🧙 Witch', 'team': 'good', 'desc': 'Kill atau heal'},
-    'hunter': {'name': '🏹 Hunter', 'team': 'good', 'desc': 'Kill saat mati'},
-    'priest': {'name': '🙏 Priest', 'team': 'good', 'desc': 'Blessing immunitas'},
-    'hacker': {'name': '💻 Hacker', 'team': 'good', 'desc': 'Hack role'},
-    'puppeteer': {'name': '🎪 Puppeteer', 'team': 'evil', 'desc': 'Control voting'},
-    'time_traveler': {'name': '⏰ Time Traveler', 'team': 'good', 'desc': 'Lihat dead role'},
+    'werewolf': {'name': '🐺 Werewolf', 'team': 'evil'},
+    'villager': {'name': '👨 Villager', 'team': 'good'},
+    'guard': {'name': '🛡️ Guard', 'team': 'good'},
+    'doctor': {'name': '👨‍⚕️ Doctor', 'team': 'good'},
+    'detective': {'name': '🔍 Detective', 'team': 'good'},
+    'mafia_boss': {'name': '👑 Mafia Boss', 'team': 'evil'},
+    'cupid': {'name': '💘 Cupid', 'team': 'good'},
+    'illusionist': {'name': '🎭 Illusionist', 'team': 'good'},
+    'spy': {'name': '🕵️ Spy', 'team': 'good'},
+    'judge': {'name': '⚖️ Judge', 'team': 'good'},
+    'witch': {'name': '🧙 Witch', 'team': 'good'},
+    'hunter': {'name': '🏹 Hunter', 'team': 'good'},
+    'priest': {'name': '🙏 Priest', 'team': 'good'},
+    'hacker': {'name': '💻 Hacker', 'team': 'good'},
+    'puppeteer': {'name': '🎪 Puppeteer', 'team': 'evil'},
+    'time_traveler': {'name': '⏰ Time Traveler', 'team': 'good'},
 }
 
 def init_db():
@@ -84,11 +84,9 @@ class GameRoom:
         self.day_count = 0
         self.night_count = 0
         self.votes = {}
-        self.actions = {}
         self.dead_players = []
-        self.created_at = datetime.now()
     
-    def add_player(self, user_id, name) -> Tuple[bool, str]:
+    def add_player(self, user_id, name):
         if len(self.players) >= self.max_players:
             return False, "❌ Room penuh!"
         if user_id in self.players:
@@ -130,53 +128,37 @@ class GameRoom:
         if status['evil'] >= status['good']:
             return 'evil'
         return None
-    
-    def can_pause(self, user_id):
-        if user_id not in self.players:
-            return False, "❌ Anda bukan pemain!"
-        if not self.players[user_id]['alive']:
-            return False, "❌ Dead player tidak bisa pause!"
-        if self.pause_count[user_id] <= 0:
-            return False, f"❌ Pause habis! (0/{MAX_PAUSES})"
-        return True, "OK"
-    
-    def do_pause(self, user_id):
-        self.paused = True
-        self.pause_count[user_id] -= 1
-        remaining = self.pause_count[user_id]
-        return f"⏸️ Game PAUSED oleh {self.players[user_id]['name']}!\n\nSisa pause: {remaining}/{MAX_PAUSES}"
 
 rooms: Dict[int, GameRoom] = {}
 user_sessions = {}
 pending_auth = {}
 room_id_counter = 1000
-group_chat_ids = {}
+phase_jobs = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logged_in = user_id in user_sessions
     keyboard = [[InlineKeyboardButton("🔐 Login", callback_data="login"), InlineKeyboardButton("✍️ Register", callback_data="register")], [InlineKeyboardButton("ℹ️ Bantuan", callback_data="help")]]
     status = "✅ Logged in" if logged_in else "❌ Not logged in"
-    await update.message.reply_text("🐺 *WEREWOLF GAME ADVANCED* 🐺\n\nSelamat datang! Game Werewolf seru di Telegram.\n\n" + f"📊 Status: {status}\n\nPilih opsi di bawah untuk mulai!", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    await update.message.reply_text("🐺 *WEREWOLF GAME* 🐺\n\n" + f"📊 Status: {status}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     if query.data == "login":
         pending_auth[user_id] = {'step': 'login_user'}
-        await query.edit_message_text("🔐 *LOGIN*\n\nKirim username:")
+        await query.edit_message_text("🔐 Username:")
     elif query.data == "register":
         pending_auth[user_id] = {'step': 'reg_user'}
-        await query.edit_message_text("✍️ *REGISTER*\n\nBuat username (min 3 char):")
+        await query.edit_message_text("✍️ Username (min 3):")
     elif query.data == "help":
-        help_msg = "🐺 *WEREWOLF GAME*\n\n/rooms - Room list\n/create_room - Buat room\n/status - Game status\n/start_game - Mulai game\n/pause - Pause game (2x per pemain)"
-        await query.edit_message_text(help_msg, parse_mode="Markdown")
+        await query.edit_message_text("🐺 *WEREWOLF*\n/rooms /status /start_game /pause", parse_mode="Markdown")
     elif query.data == "create":
         if user_id not in user_sessions:
-            await query.answer("❌ Login dulu!", show_alert=True)
+            await query.answer("❌ Login!", show_alert=True)
             return
         pending_auth[user_id] = {'step': 'room_name'}
-        await query.edit_message_text("📝 Nama room? (min 3 karakter)")
+        await query.edit_message_text("📝 Room name:")
     elif query.data == "no_pass":
         pending_auth[user_id]['has_password'] = False
         user_id_val = user_id
@@ -188,11 +170,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rooms[room_id_counter] = room
         user_sessions[user_id_val]['room'] = room_id_counter
         del pending_auth[user_id_val]
-        msg = f"✅ *ROOM DIBUAT!*\n\n*Nama:* {room.name}\n*Password:* 🔓 Tidak\n👥 {len(room.players)}/{room.max_players}"
-        await update.effective_chat.send_message(msg, parse_mode="Markdown")
+        await update.effective_chat.send_message(f"✅ *{room.name}* created!", parse_mode="Markdown")
     elif query.data == "yes_pass":
         pending_auth[user_id]['has_password'] = True
-        await query.edit_message_text("🔐 Ketik password untuk room:")
+        await query.edit_message_text("🔐 Password:")
     await query.answer()
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -205,40 +186,40 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if step == 'login_user':
         auth['username'] = text
         auth['step'] = 'login_pass'
-        await update.message.reply_text("🔐 Kirim password:")
+        await update.message.reply_text("🔐 Password:")
     elif step == 'login_pass':
         login_id = login_user(auth['username'], text)
         if login_id:
             user_sessions[user_id] = {'username': auth['username'], 'room': None}
             del pending_auth[user_id]
-            await update.message.reply_text(f"✅ *LOGIN BERHASIL!*\n\nWelcome, {auth['username']}!\n\nKetik /rooms untuk mulai!", parse_mode="Markdown")
+            await update.message.reply_text(f"✅ Welcome {auth['username']}!")
         else:
-            await update.message.reply_text("❌ Username/password salah!")
+            await update.message.reply_text("❌ Wrong!")
     elif step == 'reg_user':
         if len(text) < 3:
-            await update.message.reply_text("❌ Username minimal 3 karakter!")
+            await update.message.reply_text("❌ Min 3!")
             return
         auth['username'] = text
         auth['step'] = 'reg_pass'
-        await update.message.reply_text("✍️ Buat password (min 4 char):")
+        await update.message.reply_text("✍️ Password (min 4):")
     elif step == 'reg_pass':
         if len(text) < 4:
-            await update.message.reply_text("❌ Password minimal 4 karakter!")
+            await update.message.reply_text("❌ Min 4!")
             return
         if register_user(auth['username'], text):
             user_sessions[user_id] = {'username': auth['username'], 'room': None}
             del pending_auth[user_id]
-            await update.message.reply_text(f"✅ *REGISTER BERHASIL!*\n\nWelcome, {auth['username']}!\n\nKetik /rooms untuk mulai!", parse_mode="Markdown")
+            await update.message.reply_text(f"✅ Welcome {auth['username']}!")
         else:
-            await update.message.reply_text("❌ Username sudah digunakan!")
+            await update.message.reply_text("❌ Used!")
     elif step == 'room_name':
         if len(text) < 3:
-            await update.message.reply_text("❌ Room name minimal 3 karakter!")
+            await update.message.reply_text("❌ Min 3!")
             return
         auth['room_name'] = text
         auth['step'] = 'room_pass'
-        keyboard = [[InlineKeyboardButton("🔓 Tidak ada password", callback_data="no_pass")], [InlineKeyboardButton("🔐 Pakai password", callback_data="yes_pass")]]
-        await update.message.reply_text("🔐 Tambah password untuk room?", reply_markup=InlineKeyboardMarkup(keyboard))
+        keyboard = [[InlineKeyboardButton("🔓 No password", callback_data="no_pass")], [InlineKeyboardButton("🔐 With password", callback_data="yes_pass")]]
+        await update.message.reply_text("🔐 Add password?", reply_markup=InlineKeyboardMarkup(keyboard))
     elif step == 'room_password':
         global room_id_counter
         password = text
@@ -248,155 +229,186 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rooms[room_id_counter] = room
         user_sessions[user_id]['room'] = room_id_counter
         del pending_auth[user_id]
-        msg = f"✅ *ROOM DIBUAT!*\n\n*Nama:* {room.name}\n*Password:* 🔐 Ada\n👥 {len(room.players)}/{room.max_players}"
-        await update.message.reply_text(msg, parse_mode="Markdown")
+        await update.message.reply_text(f"✅ *{room.name}* created!")
 
 async def rooms_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in user_sessions:
-        await update.message.reply_text("❌ Login dulu! /start")
+        await update.message.reply_text("❌ Login! /start")
         return
     if not rooms:
-        await update.message.reply_text("📭 Tidak ada room.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕ Buat Room", callback_data="create")]]))
+        await update.message.reply_text("📭 No room.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕ Create", callback_data="create")]]))
         return
-    msg = "📋 *DAFTAR ROOM:*\n\n"
+    msg = "📋 *ROOMS:*\n\n"
     keyboard = []
     for rid, room in rooms.items():
         if not room.game_active:
             pct = len(room.players)
             stat = "✅" if pct >= 5 else "⏳"
-            lock = "🔐" if room.password else "🔓"
-            msg += f"{stat} *{room.name}* {lock}\n👥 {pct}/{room.max_players}\n\n"
-            keyboard.append([InlineKeyboardButton(f"📍 {room.name} ({pct}/{room.max_players})", callback_data=f"join:{rid}")])
-    keyboard.append([InlineKeyboardButton("➕ Buat Room Baru", callback_data="create")])
+            msg += f"{stat} {room.name}\n👥 {pct}/{room.max_players}\n\n"
+            keyboard.append([InlineKeyboardButton(f"{room.name} ({pct}/{room.max_players})", callback_data=f"join:{rid}")])
+    keyboard.append([InlineKeyboardButton("➕ Create New", callback_data="create")])
     await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 async def create_room_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in user_sessions:
-        await update.message.reply_text("❌ Login dulu! /start")
+        await update.message.reply_text("❌ Login!")
         return
     pending_auth[user_id] = {'step': 'room_name'}
-    await update.message.reply_text("📝 Nama room? (min 3 karakter)")
+    await update.message.reply_text("📝 Room name:")
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in user_sessions or user_sessions[user_id]['room'] is None:
-        await update.message.reply_text("❌ Anda tidak di room!")
+        await update.message.reply_text("❌ No room!")
         return
     room_id = user_sessions[user_id]['room']
     if room_id not in rooms:
-        await update.message.reply_text("❌ Room tidak ditemukan!")
+        await update.message.reply_text("❌ Room not found!")
         return
     room = rooms[room_id]
     status = room.get_status()
     user_pause = room.pause_count.get(user_id, 0)
-    msg = f"📊 *ROOM: {room.name}*\n\n👥 Pemain: {len(room.players)}/{room.max_players}\n🟢 Good: {status['good']} | ⚫ Evil: {status['evil']}\n⏸️ Pause: {user_pause}/{MAX_PAUSES}\n"
+    msg = f"📊 *{room.name}*\n👥 {len(room.players)}/{room.max_players}\n🟢 Good: {status['good']} | ⚫ Evil: {status['evil']}\n⏸️ Pause: {user_pause}/{MAX_PAUSES}\n"
     if room.paused:
-        msg += "\n⏸️ *GAME PAUSED* ⏸️"
+        msg += "\n⏸️ *GAME PAUSED*"
     if room.game_active:
-        msg += f"🎮 GAME AKTIF\nPhase: {room.phase.upper()}\nHari: {room.day_count}"
+        msg += f"\n🎮 Phase: {room.phase.upper()}\nDay: {room.day_count}"
     else:
         need = MIN_PLAYERS - len(room.players)
         if need > 0:
-            msg += f"⏳ Tunggu {need} pemain lagi!"
+            msg += f"\n⏳ Wait {need} more!"
         else:
-            msg += f"✅ Siap dimulai! /start_game"
+            msg += f"\n✅ Ready! /start_game"
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 async def pause_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in user_sessions or user_sessions[user_id]['room'] is None:
-        await update.message.reply_text("❌ Anda tidak di room!")
+        await update.message.reply_text("❌ No room!")
         return
     room_id = user_sessions[user_id]['room']
     room = rooms[room_id]
     if not room.game_active:
-        await update.message.reply_text("❌ Game tidak sedang berjalan!")
+        await update.message.reply_text("❌ Game not active!")
         return
-    can_pause, msg = room.can_pause(user_id)
-    if not can_pause:
-        await update.message.reply_text(msg)
+    if user_id not in room.players:
+        await update.message.reply_text("❌ Not a player!")
         return
-    pause_msg = room.do_pause(user_id)
-    await context.bot.send_message(chat_id=room.chat_id, text=pause_msg, parse_mode="Markdown")
-    context.job_queue.run_once(lambda ctx: auto_resume(ctx, room_id, context.bot), when=PAUSE_DURATION)
+    if not room.players[user_id]['alive']:
+        await update.message.reply_text("❌ Dead can't pause!")
+        return
+    if room.pause_count[user_id] <= 0:
+        await update.message.reply_text(f"❌ Pause used! (0/{MAX_PAUSES})")
+        return
+    
+    room.paused = True
+    room.pause_count[user_id] -= 1
+    remaining = room.pause_count[user_id]
+    msg = f"⏸️ *PAUSED by {room.players[user_id]['name']}*\nRemaining: {remaining}/{MAX_PAUSES}"
+    await context.bot.send_message(chat_id=room.chat_id, text=msg, parse_mode="Markdown")
+    
+    if room_id in phase_jobs:
+        phase_jobs[room_id].schedule_removal()
+    
+    context.job_queue.run_once(lambda ctx: auto_resume_game(ctx, room_id, context.bot), when=PAUSE_DURATION)
 
-async def auto_resume(context, room_id, bot):
+async def auto_resume_game(context, room_id, bot):
+    if room_id not in rooms:
+        return
     room = rooms[room_id]
     room.paused = False
-    msg = "▶️ *GAME RESUMED* ▶️\n\nGame dilanjutkan..."
+    msg = "▶️ *GAME RESUMED*"
     await bot.send_message(chat_id=room.chat_id, text=msg, parse_mode="Markdown")
 
 async def start_game_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in user_sessions or user_sessions[user_id]['room'] is None:
-        await update.message.reply_text("❌ Anda tidak di room!")
+        await update.message.reply_text("❌ No room!")
         return
     room_id = user_sessions[user_id]['room']
     room = rooms[room_id]
     if len(room.players) < MIN_PLAYERS:
-        await update.message.reply_text(f"❌ Minimal {MIN_PLAYERS} pemain!")
+        await update.message.reply_text(f"❌ Min {MIN_PLAYERS}!")
         return
     if room.game_active:
-        await update.message.reply_text("❌ Game sudah berjalan!")
+        await update.message.reply_text("❌ Already running!")
         return
     room.game_active = True
     room.chat_id = update.effective_chat.id
-    group_chat_ids[room_id] = update.effective_chat.id
     room.assign_roles()
-    msg = f"🎮 *GAME DIMULAI!* 🎮\n\n👥 Total: {len(room.players)} pemain\n🐺 Werewolves: {sum(1 for p in room.players.values() if p['role'] in ['werewolf', 'mafia_boss'])}\n"
-    msg += "\nRole sudah dikirim via DM!\n\n🌙 FASE MALAM dimulai dalam 5 detik..."
+    msg = f"🎮 *GAME START* 🎮\n👥 {len(room.players)} players\n🐺 WW: {sum(1 for p in room.players.values() if p['role'] in ['werewolf', 'mafia_boss'])}\n\nRoles sent to DM!\n/pause - Pause game"
     await update.effective_chat.send_message(msg, parse_mode="Markdown")
     for player_id, player in room.players.items():
         try:
             role_info = ROLES[player['role']]
-            role_msg = f"🎭 *ROLE MU:* {role_info['name']}\n\n{role_info['desc']}\n\n⏸️ Kamu punya 2x pause (20 detik each)\nKetik /pause untuk pause game"
+            role_msg = f"🎭 Role: {role_info['name']}\n\n⏸️ Pause: 2x (20s each)\n/pause - Pause"
             await context.bot.send_message(chat_id=player_id, text=role_msg, parse_mode="Markdown")
         except:
             pass
     context.job_queue.run_once(lambda ctx: night_phase(ctx, room_id, context.bot), when=5)
 
 async def night_phase(context, room_id, bot):
+    if room_id not in rooms:
+        return
     room = rooms[room_id]
     room.night_count += 1
     room.phase = 'night'
-    msg = f"🌙 *FASE MALAM KE-{room.night_count}* 🌙\n\n"
-    msg += "Werewolf, Guard, Doctor, Detective - ambil aksi kalian!\n\n⏰ Waktu: 60 detik\n\n/pause - Pause game"
+    msg = f"🌙 *NIGHT {room.night_count}* 🌙\n\nRole action! 60s\n/pause"
     await bot.send_message(chat_id=room.chat_id, text=msg, parse_mode="Markdown")
-    context.job_queue.run_once(lambda ctx: day_phase(ctx, room_id, context.bot), when=PHASE_DURATION)
+    job = context.job_queue.run_once(lambda ctx: day_phase(ctx, room_id, context.bot), when=PHASE_DURATION)
+    phase_jobs[room_id] = job
 
 async def day_phase(context, room_id, bot):
+    if room_id not in rooms:
+        return
     room = rooms[room_id]
+    if room.paused:
+        job = context.job_queue.run_once(lambda ctx: day_phase(ctx, room_id, context.bot), when=PHASE_DURATION)
+        phase_jobs[room_id] = job
+        return
     room.day_count += 1
     room.phase = 'day'
     status = room.get_status()
-    msg = f"☀️ *PAGI KE-{room.day_count}* ☀️\n\n"
-    msg += f"🟢 Alive: {len(status['alive'])}\n💀 Dead: {len(room.dead_players)}\n\n"
-    msg += "Diskusi & voting dalam 60 detik!\n\n/pause - Pause game"
+    msg = f"☀️ *DAY {room.day_count}* ☀️\n🟢 Alive: {len(status['alive'])}\n💀 Dead: {len(room.dead_players)}\n\nDiscuss! 60s\n/pause"
     keyboard = []
     for i, (pid, player) in enumerate(status['alive'].items(), 1):
         keyboard.append([InlineKeyboardButton(f"{i}. {player['name']}", callback_data=f"vote:{pid}")])
     await bot.send_message(chat_id=room.chat_id, text=msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-    context.job_queue.run_once(lambda ctx: voting_phase(ctx, room_id, context.bot), when=PHASE_DURATION)
+    job = context.job_queue.run_once(lambda ctx: voting_phase(ctx, room_id, context.bot), when=PHASE_DURATION)
+    phase_jobs[room_id] = job
 
 async def voting_phase(context, room_id, bot):
+    if room_id not in rooms:
+        return
     room = rooms[room_id]
+    if room.paused:
+        job = context.job_queue.run_once(lambda ctx: voting_phase(ctx, room_id, context.bot), when=PHASE_DURATION)
+        phase_jobs[room_id] = job
+        return
     room.phase = 'voting'
     status = room.get_status()
     alive_list = list(status['alive'].keys())
-    msg = f"🗳️ *VOTING PHASE* 🗳️\n\n60 detik terakhir untuk voting!\n\n/pause - Pause game"
+    msg = f"🗳️ *VOTING* 🗳️\n60s! /pause"
     keyboard = []
     for i, pid in enumerate(alive_list, 1):
         player = room.players[pid]
         keyboard.append([InlineKeyboardButton(f"{i}. {player['name']}", callback_data=f"final_vote:{pid}")])
     await bot.send_message(chat_id=room.chat_id, text=msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-    context.job_queue.run_once(lambda ctx: count_votes(ctx, room_id, context.bot), when=PHASE_DURATION)
+    job = context.job_queue.run_once(lambda ctx: count_votes(ctx, room_id, context.bot), when=PHASE_DURATION)
+    phase_jobs[room_id] = job
 
 async def count_votes(context, room_id, bot):
+    if room_id not in rooms:
+        return
     room = rooms[room_id]
+    if room.paused:
+        job = context.job_queue.run_once(lambda ctx: count_votes(ctx, room_id, context.bot), when=PHASE_DURATION)
+        phase_jobs[room_id] = job
+        return
     if not room.votes:
-        await bot.send_message(chat_id=room.chat_id, text="⚖️ Tidak ada voting!")
+        await bot.send_message(chat_id=room.chat_id, text="⚖️ No votes!")
         context.job_queue.run_once(lambda ctx: check_win(ctx, room_id, context.bot), when=2)
         return
     vote_count = {}
@@ -405,8 +417,8 @@ async def count_votes(context, room_id, bot):
     max_votes = max(vote_count.values())
     most_voted = [pid for pid, votes in vote_count.items() if votes == max_votes]
     if len(most_voted) > 1:
-        msg = "⚖️ SERI! Voting ulang..."
-        await bot.send_message(chat_id=room.chat_id, text=msg, parse_mode="Markdown")
+        msg = "⚖️ TIE! Re-voting..."
+        await bot.send_message(chat_id=room.chat_id, text=msg)
         room.votes = {}
         context.job_queue.run_once(lambda ctx: voting_phase(ctx, room_id, context.bot), when=2)
         return
@@ -414,20 +426,22 @@ async def count_votes(context, room_id, bot):
     room.players[eliminated_id]['alive'] = False
     room.dead_players.append(eliminated_id)
     eliminated = room.players[eliminated_id]
-    msg = f"💀 *{eliminated['name']}* DIELIMINASI!\n\nRole: {ROLES[eliminated['role']]['name']}"
+    msg = f"💀 *{eliminated['name']}* ELIMINATED!\nRole: {ROLES[eliminated['role']]['name']}"
     await bot.send_message(chat_id=room.chat_id, text=msg, parse_mode="Markdown")
     context.job_queue.run_once(lambda ctx: check_win(ctx, room_id, context.bot), when=2)
 
 async def check_win(context, room_id, bot):
+    if room_id not in rooms:
+        return
     room = rooms[room_id]
     winner = room.check_win()
     if winner:
         status = room.get_status()
-        msg = f"🏆 *GAME SELESAI!* 🏆\n\n"
+        msg = f"🏆 *GAME END* 🏆\n\n"
         if winner == 'good':
-            msg += "✅ *VILLAGERS MENANG!*\n\nSemua werewolf berhasil dieliminasi!"
+            msg += "✅ *VILLAGERS WIN!*"
         else:
-            msg += "⚫ *WEREWOLVES MENANG!*\n\nEvil team seimbang atau lebih!"
+            msg += "⚫ *WEREWOLVES WIN!*"
         msg += f"\n\n🟢 Good: {status['good']} | ⚫ Evil: {status['evil']}"
         await bot.send_message(chat_id=room.chat_id, text=msg, parse_mode="Markdown")
         room.game_active = False
