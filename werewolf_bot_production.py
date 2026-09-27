@@ -1,7 +1,6 @@
 import sqlite3
 import random
 import hashlib
-import os
 from datetime import datetime
 from typing import Dict, Tuple, Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -10,13 +9,11 @@ from telegram.ext import (
     MessageHandler, filters, ContextTypes
 )
 
-# ============ CONFIG ============
 BOT_TOKEN = "8744113633:AAH5nHMtaqnPUJgkoWQkvMMdxAugg9Agiaw"
 MIN_PLAYERS = 5
 MAX_PLAYERS = 20
 DATABASE_FILE = "werewolf_game.db"
 
-# ============ ROLES DATA ============
 ROLES = {
     'werewolf': {'name': '🐺 Werewolf', 'team': 'evil', 'desc': 'Bunuh 1 pemain malam'},
     'villager': {'name': '👨 Villager', 'team': 'good', 'desc': 'Vote eliminasi'},
@@ -36,7 +33,6 @@ ROLES = {
     'time_traveler': {'name': '⏰ Time Traveler', 'team': 'good', 'desc': 'Lihat dead role'},
 }
 
-# ============ DATABASE ============
 def init_db():
     conn = sqlite3.connect(DATABASE_FILE)
     c = conn.cursor()
@@ -50,7 +46,6 @@ def init_db():
 
 init_db()
 
-# ============ HELPER FUNCTIONS ============
 def hash_pwd(pwd: str) -> str:
     return hashlib.sha256(pwd.encode()).hexdigest()
 
@@ -75,7 +70,6 @@ def login_user(username: str, password: str) -> Optional[int]:
     conn.close()
     return result[0] if result else None
 
-# ============ GAME ROOM ============
 class GameRoom:
     def __init__(self, room_id, name, password, creator_id, max_players=12):
         self.room_id = room_id
@@ -139,38 +133,21 @@ class GameRoom:
             return 'evil'
         return None
 
-# ============ GLOBAL STATE ============
 rooms: Dict[int, GameRoom] = {}
 user_sessions = {}
 pending_auth = {}
 room_id_counter = 1000
 
-# ============ COMMAND HANDLERS ============
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logged_in = user_id in user_sessions
-    
-    keyboard = [
-        [InlineKeyboardButton("🔐 Login", callback_data="login"),
-         InlineKeyboardButton("✍️ Register", callback_data="register")],
-        [InlineKeyboardButton("ℹ️ Bantuan", callback_data="help")]
-    ]
-    
+    keyboard = [[InlineKeyboardButton("🔐 Login", callback_data="login"), InlineKeyboardButton("✍️ Register", callback_data="register")], [InlineKeyboardButton("ℹ️ Bantuan", callback_data="help")]]
     status = "✅ Logged in" if logged_in else "❌ Not logged in"
-    
-    await update.message.reply_text(
-        "🐺 *WEREWOLF GAME ADVANCED* 🐺\n\n"
-        "Selamat datang! Game Werewolf seru di Telegram.\n\n"
-        f"📊 Status: {status}\n\n"
-        "Pilih opsi di bawah untuk mulai!",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text("🐺 *WEREWOLF GAME ADVANCED* 🐺\n\nSelamat datang! Game Werewolf seru di Telegram.\n\n" + f"📊 Status: {status}\n\nPilih opsi di bawah untuk mulai!", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
-    
     if query.data == "login":
         pending_auth[user_id] = {'step': 'login_user'}
         await query.edit_message_text("🔐 *LOGIN*\n\nKirim username:")
@@ -178,8 +155,31 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending_auth[user_id] = {'step': 'reg_user'}
         await query.edit_message_text("✍️ *REGISTER*\n\nBuat username (min 3 char):")
     elif query.data == "help":
-        help_msg = "🐺 *WEREWOLF GAME ADVANCED*\n\n*CARA BERMAIN:*\n1. Register/Login\n2. /rooms → Buat atau join room\n3. Tunggu 5+ pemain\n4. Game start otomatis!\n\n*PHASE GAME:*\n🌙 Malam - Role ambil action\n☀️ Siang - Diskusi & vote\n🗳️ Voting - Eliminasi hasil vote"
+        help_msg = "🐺 *WEREWOLF GAME ADVANCED*\n\n*CARA BERMAIN:*\n1. Register/Login\n2. /rooms\n3. Buat atau join room\n4. Tunggu 5+ pemain\n5. Game start!\n\n*COMMANDS:*\n/start - Menu\n/rooms - Room list\n/create_room - Buat room\n/status - Game status"
         await query.edit_message_text(help_msg, parse_mode="Markdown")
+    elif query.data == "create":
+        if user_id not in user_sessions:
+            await query.answer("❌ Login dulu!", show_alert=True)
+            return
+        pending_auth[user_id] = {'step': 'room_name'}
+        await query.edit_message_text("📝 Nama room? (min 3 karakter)")
+    elif query.data == "no_pass":
+        pending_auth[user_id]['has_password'] = False
+        await query.edit_message_text("✅ Room tanpa password. Room dibuat!")
+        user_id_val = user_id
+        room_name = pending_auth[user_id]['room_name']
+        global room_id_counter
+        room_id_counter += 1
+        room = GameRoom(room_id_counter, room_name, None, user_id_val, MAX_PLAYERS)
+        room.add_player(user_id_val, update.effective_user.first_name)
+        rooms[room_id_counter] = room
+        user_sessions[user_id_val]['room'] = room_id_counter
+        del pending_auth[user_id_val]
+        msg = f"✅ *ROOM DIBUAT!*\n\n*Nama:* {room.name}\n*Password:* 🔓 Tidak\n👥 {len(room.players)}/{room.max_players}"
+        await update.effective_chat.send_message(msg, parse_mode="Markdown")
+    elif query.data == "yes_pass":
+        pending_auth[user_id]['has_password'] = True
+        await query.edit_message_text("🔐 Ketik password untuk room:")
     await query.answer()
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -188,7 +188,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id not in pending_auth:
         return
     auth = pending_auth[user_id]
-    step = auth['step']
+    step = auth.get('step')
     if step == 'login_user':
         auth['username'] = text
         auth['step'] = 'login_pass'
@@ -198,7 +198,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if login_id:
             user_sessions[user_id] = {'username': auth['username'], 'room': None}
             del pending_auth[user_id]
-            await update.message.reply_text(f"✅ *LOGIN BERHASIL!*\n\nWelcome, {auth['username']}!\n\nKetik /rooms untuk mulai bermain!", parse_mode="Markdown")
+            await update.message.reply_text(f"✅ *LOGIN BERHASIL!*\n\nWelcome, {auth['username']}!\n\nKetik /rooms untuk mulai!", parse_mode="Markdown")
         else:
             await update.message.reply_text("❌ Username/password salah!")
     elif step == 'reg_user':
@@ -215,14 +215,33 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if register_user(auth['username'], text):
             user_sessions[user_id] = {'username': auth['username'], 'room': None}
             del pending_auth[user_id]
-            await update.message.reply_text(f"✅ *REGISTER BERHASIL!*\n\nWelcome, {auth['username']}!\n\nKetik /rooms untuk mulai bermain!", parse_mode="Markdown")
+            await update.message.reply_text(f"✅ *REGISTER BERHASIL!*\n\nWelcome, {auth['username']}!\n\nKetik /rooms untuk mulai!", parse_mode="Markdown")
         else:
             await update.message.reply_text("❌ Username sudah digunakan!")
+    elif step == 'room_name':
+        if len(text) < 3:
+            await update.message.reply_text("❌ Room name minimal 3 karakter!")
+            return
+        auth['room_name'] = text
+        auth['step'] = 'room_pass'
+        keyboard = [[InlineKeyboardButton("🔓 Tidak ada password", callback_data="no_pass")], [InlineKeyboardButton("🔐 Pakai password", callback_data="yes_pass")]]
+        await update.message.reply_text("🔐 Tambah password untuk room?", reply_markup=InlineKeyboardMarkup(keyboard))
+    elif step == 'room_password':
+        global room_id_counter
+        password = text
+        room_id_counter += 1
+        room = GameRoom(room_id_counter, auth['room_name'], password, user_id, MAX_PLAYERS)
+        room.add_player(user_id, update.effective_user.first_name)
+        rooms[room_id_counter] = room
+        user_sessions[user_id]['room'] = room_id_counter
+        del pending_auth[user_id]
+        msg = f"✅ *ROOM DIBUAT!*\n\n*Nama:* {room.name}\n*Password:* 🔐 Ada\n👥 {len(room.players)}/{room.max_players}"
+        await update.message.reply_text(msg, parse_mode="Markdown")
 
 async def rooms_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in user_sessions:
-        await update.message.reply_text("❌ Anda harus login dulu!\n\nKetik /start")
+        await update.message.reply_text("❌ Login dulu! /start")
         return
     if not rooms:
         await update.message.reply_text("📭 Tidak ada room.\n\n/create_room untuk buat!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕ Buat Room", callback_data="create")]]))
@@ -242,7 +261,7 @@ async def rooms_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def create_room_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in user_sessions:
-        await update.message.reply_text("❌ Anda harus login dulu!")
+        await update.message.reply_text("❌ Login dulu! /start")
         return
     pending_auth[user_id] = {'step': 'room_name'}
     await update.message.reply_text("📝 Nama room? (min 3 karakter)")
@@ -250,7 +269,7 @@ async def create_room_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in user_sessions or user_sessions[user_id]['room'] is None:
-        await update.message.reply_text("❌ Anda tidak di room mana pun!")
+        await update.message.reply_text("❌ Anda tidak di room!")
         return
     room_id = user_sessions[user_id]['room']
     if room_id not in rooms:
@@ -258,15 +277,15 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     room = rooms[room_id]
     status = room.get_status()
-    msg = f"📊 *ROOM: {room.name}*\n\n👥 Pemain: {len(room.players)}/{room.max_players}\n🟢 Good: {status['good']} | ⚫ Evil: {status['evil']}\n✅ Alive: {len(status['alive'])} | 💀 Dead: {len(status['dead'])}\n\n"
+    msg = f"📊 *ROOM: {room.name}*\n\n👥 Pemain: {len(room.players)}/{room.max_players}\n🟢 Good: {status['good']} | ⚫ Evil: {status['evil']}\n"
     if room.game_active:
-        msg += f"🎮 *GAME AKTIF*\nPhase: {room.phase.upper()}\nHari ke-: {room.day_count}"
+        msg += f"🎮 GAME AKTIF - Phase: {room.phase.upper()}"
     else:
         need = 5 - len(room.players)
         if need > 0:
-            msg += f"⏳ Tunggu {need} pemain lagi untuk mulai!"
+            msg += f"⏳ Tunggu {need} pemain lagi!"
         else:
-            msg += f"✅ SIAP DIMULAI!"
+            msg += f"✅ Siap dimulai!"
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 async def main():
@@ -275,7 +294,7 @@ async def main():
     app.add_handler(CommandHandler("rooms", rooms_cmd))
     app.add_handler(CommandHandler("create_room", create_room_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
-    app.add_handler(CallbackQueryHandler(button_handler, pattern="^(login|register|help|create)$"))
+    app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     print("✅ Bot Online! 🐺")
     await app.run_polling()
