@@ -1,1 +1,1 @@
-worker: python werewolf_bot_production.py
+web: python app.py
